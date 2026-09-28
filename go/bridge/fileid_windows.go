@@ -6,10 +6,13 @@ import (
 )
 
 // fileID names the filesystem object itself, including a symbolic link rather
-// than its target. The pair survives a service restart.
+// than its target. Its creation time distinguishes a reused file index.
 type fileID struct {
-	Volume uint64 `json:"volume"`
-	Index  uint64 `json:"index"`
+	Volume       uint64 `json:"volume"`
+	Index        uint64 `json:"index"`
+	Version      uint8  `json:"version"`
+	BirthSeconds int64  `json:"birth_seconds"`
+	BirthNanos   int64  `json:"birth_nanos"`
 }
 
 func identityOf(path string) (fileID, error) {
@@ -27,7 +30,11 @@ func identityOf(path string) (fileID, error) {
 	if err := syscall.GetFileInformationByHandle(h, &info); err != nil {
 		return fileID{}, err
 	}
-	return fileID{Volume: uint64(info.VolumeSerialNumber), Index: uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow)}, nil
+	birth := info.CreationTime.Nanoseconds()
+	return fileID{
+		Volume: uint64(info.VolumeSerialNumber), Index: uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow),
+		Version: 1, BirthSeconds: birth / 1e9, BirthNanos: birth % 1e9,
+	}, nil
 }
 
 func moveNoReplace(from, to string) error {

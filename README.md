@@ -57,6 +57,12 @@ unfinished lend needs reconciliation: <link>`, or `modelbridge: unfinished
 created directory needs reconciliation: <directory>`. `Unlend` of an older entry can
 return `unavailable: this legacy entry has no durable ownership record`.
 These refusals preserve a file whose ownership the provider cannot prove.
+Current receipts include a creation-time discriminator. Linux filesystems must
+provide birth time through `statx`; otherwise the provider reports
+`modelbridge: filesystem birth time unavailable for ownership receipt` and
+refuses the operation. Older receipts with only `volume` and `index` cannot
+prove ownership after a file index is reused. Preserve the named file and
+ledger for reconciliation rather than filling in missing receipt fields.
 
 1. Find the provider's `--state DIR` (or `MODELBRIDGE_STATE`); its record is
    `DIR/lends.json`. Find the `modelbridged` PID whose command line names that
@@ -70,7 +76,9 @@ These refusals preserve a file whose ownership the provider cannot prove.
    editor. Check `version` is `1`. A committed row is in `lends`; its `ID`,
    `Engine`, `Store`, `Object`, `Link` and `Kind` name the lend. A matching
    `owned[ID]` receipt contains `file` and `parent`, each with native `volume`
-   and `index` numbers. `dirs` records directories this provider created.
+   and `index` numbers. Current receipts also contain `version`,
+   `birth_seconds` and `birth_nanos`. `dirs` records directories this provider
+   created.
    An unfinished row is in `pending`; `entry.ID`, `entry.Link`, and `stage`
    name its exact paths. An optional `creating` path marks a directory whose
    creation was recorded before `mkdir` but whose native ownership was not
@@ -101,12 +109,14 @@ These refusals preserve a file whose ownership the provider cannot prove.
    the same filesystem outside the engine's model tree, with no overwrite,
    and retain it there. Preserve a foreign replacement in place or at that
    recovery location. Never infer directory ownership from `creating` alone.
-4. For a legacy `lends` row with no `owned[ID]`, automatic `Unlend` cannot
-   establish which object stands at `Link`. To withdraw its ledger claim,
+4. For a legacy `lends` row with no `owned[ID]`, or an older two-field
+   `owned[ID]` receipt, automatic `Unlend` cannot establish which object stands
+   at `Link`. To withdraw its ledger claim,
    preserve the exact `Link` object in a new, empty recovery location as
    above, or leave it in place as an unrecorded engine file. Back up the
-   ledger, remove **only that one `lends` row** in a JSON-aware editor, validate
-   and compare it, then replace the record while the provider is stopped.
+   ledger, remove **only that one `lends` row and its matching `owned[ID]` if
+   present** in a JSON-aware editor, validate and compare it, then replace the
+   record while the provider is stopped.
    Restart the provider. A link left in place blocks a new lend at that name
    with `link_refused`; an archived link leaves the name free for a fresh lend
    with a new ownership receipt. This manual withdrawal does not promise the

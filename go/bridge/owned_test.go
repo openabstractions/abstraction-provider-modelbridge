@@ -183,3 +183,85 @@ func TestRestartRestoresAQuarantinedForeignReplacement(t *testing.T) {
 		t.Fatalf("replacement was not restored: %v %q", err, data)
 	}
 }
+
+func TestLegacyOwnershipReceiptFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.gguf")
+	if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := identityOf(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := fileID{Volume: actual.Volume, Index: actual.Index}
+	removed, err := removeOwned(path, legacy, false)
+	if removed || err == nil {
+		t.Fatalf("unowned replacement removed=%v, err=%v", removed, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
+		t.Fatalf("replacement changed: %q, %v", data, err)
+	}
+}
+
+func TestOwnershipReceiptRejectsReusedIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.gguf")
+	if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := identityOf(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.Version != 1 {
+		t.Fatalf("ownership receipt version = %d", actual.Version)
+	}
+	changedBirth := actual
+	changedBirth.BirthNanos++
+	removed, err := removeOwned(path, changedBirth, false)
+	if removed || err == nil {
+		t.Fatalf("unowned replacement removed=%v, err=%v", removed, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
+		t.Fatalf("replacement changed: %q, %v", data, err)
+	}
+}
+
+func TestRestartRestoresQuarantineWithLegacyReceipt(t *testing.T) {
+	base := t.TempDir()
+	link := filepath.Join(base, "model.gguf")
+	if err := os.WriteFile(link, []byte("preserve"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, err := identityOf(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := fileID{Volume: current.Volume, Index: current.Index}
+	ledgerPath := filepath.Join(base, "state", "lends.json")
+	l, err := OpenLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.lends = append(l.lends, wire.Lend{ID: "lend-test", Engine: "engine", Store: "store", Object: "object", Name: "model", Link: link, Kind: wire.LinkCopy, Created: "now"})
+	parent, err := identityOf(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.owned["lend-test"] = ownedLink{File: legacy, Parent: parent}
+	if err := l.write(); err != nil {
+		t.Fatal(err)
+	}
+	q := quarantineDir(link, legacy)
+	if err := os.Mkdir(q, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(link, filepath.Join(q, filepath.Base(link))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenLedger(ledgerPath); err == nil {
+		t.Fatal("legacy receipt was accepted as proof of owned quarantine")
+	}
+	if data, err := os.ReadFile(link); err != nil || string(data) != "preserve" {
+		t.Fatalf("quarantined file was not restored: %q, %v", data, err)
+	}
+}
