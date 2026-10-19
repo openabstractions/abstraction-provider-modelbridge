@@ -6,13 +6,16 @@
 package bridge
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/container"
@@ -102,8 +105,9 @@ func (l *LocalStores) Root(store string) string {
 }
 
 // Resolve matches id against the manifest id, each name the store gives the
-// manifest, and each entry's locator, in that order. The first weights entry
-// of the matched manifest is the object; a stray object matches by locator.
+// manifest, and each entry's locator. A shared manifest name tries each child
+// until one binds. An explicit id or locator keeps its own result. The first
+// weights entry of a manifest is its object; a stray object matches by locator.
 func (l *LocalStores) Resolve(store, id string, accept Accepts) (Object, error) {
 	result := l.take()
 	root := ""
@@ -115,6 +119,8 @@ func (l *LocalStores) Resolve(store, id string, accept Accepts) (Object, error) 
 	if root == "" {
 		return Object{}, fmt.Errorf("%w: no store %s", ErrUnknownObject, store)
 	}
+	var unbound Object
+	var unboundErr error
 	for _, m := range result.Page.Manifests {
 		if m.Manifest.Store != store || !manifestNamed(m.Manifest, id) {
 			continue
@@ -131,7 +137,27 @@ func (l *LocalStores) Resolve(store, id string, accept Accepts) (Object, error) 
 		if m.Manifest.Kind == "abstraction.model/descriptor@1" {
 			family = m.Manifest.Descriptor["family"]
 		}
-		return object(store, m.Manifest.ID, entry.Locator, root, name, family, entry.Size, accept)
+		o, err := object(store, m.Manifest.ID, entry.Locator, root, name, family, entry.Size, accept)
+		if err == nil {
+			return o, nil
+		}
+		var unsupported *unsupportedFormat
+		explicit := m.Manifest.ID == id
+		for _, e := range m.Manifest.Entries {
+			explicit = explicit || e.Locator == id
+		}
+		if explicit ||
+			(!errors.As(err, &unsupported) && !errors.Is(err, ErrUnaccepted)) {
+			return o, err
+		}
+		// Keep the original refusal when no same-name child binds. Real I/O,
+		// container and pickle failures above remain terminal.
+		if unboundErr == nil {
+			unbound, unboundErr = o, err
+		}
+	}
+	if unboundErr != nil {
+		return unbound, unboundErr
 	}
 	for _, o := range result.Page.Objects {
 		if o.Store == store && o.Object.Locator == id && !o.Object.Partial {
@@ -140,6 +166,12 @@ func (l *LocalStores) Resolve(store, id string, accept Accepts) (Object, error) 
 	}
 	return Object{}, fmt.Errorf("%w: no object %s in store %s", ErrUnknownObject, id, store)
 }
+
+// unsupportedFormat separates a readable object with no supported format from
+// failures resolving or reading it. Both retain the public unknown-object kind.
+type unsupportedFormat struct{ error }
+
+func (e *unsupportedFormat) Unwrap() error { return e.error }
 
 func object(store, id, locator, root, name, descriptorFamily string, size int64, accept Accepts) (Object, error) {
 	base := path.Base(locator)
@@ -169,7 +201,30 @@ func object(store, id, locator, root, name, descriptorFamily string, size int64,
 		return Object{}, fmt.Errorf("%w: %s in store %s is a pickle, which OA never loads", ErrPickle, locator, store)
 	}
 	if source.ModelFormatOf(header, base) == "" {
-		return Object{}, fmt.Errorf("%w: %s in store %s is in no model format OA loads", ErrUnknownObject, locator, store)
+		if header != "" {
+			// The existing classifier treats an unreadable header as no format.
+			// Before trying a sibling, retain that I/O failure instead. Opening
+			// non-blocking and checking the opened object preserves FIFO refusal.
+			f, err := os.OpenFile(header, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				return Object{}, fmt.Errorf("%w: %w", ErrUnknownObject, err)
+			}
+			st, statErr := f.Stat()
+			if statErr != nil || !st.Mode().IsRegular() {
+				_ = f.Close() // A non-regular object is already refused.
+				return Object{}, fmt.Errorf("%w: %s is not a readable regular file: %v", ErrUnknownObject, locator, statErr)
+			}
+			var bytes [4]byte
+			_, readErr := io.ReadFull(f, bytes[:])
+			closeErr := f.Close()
+			if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+				return Object{}, fmt.Errorf("%w: %w", ErrUnknownObject, readErr)
+			}
+			if closeErr != nil {
+				return Object{}, fmt.Errorf("%w: %w", ErrUnknownObject, closeErr)
+			}
+		}
+		return Object{}, &unsupportedFormat{fmt.Errorf("%w: %s in store %s is in no model format OA loads", ErrUnknownObject, locator, store)}
 	}
 	o := Object{Store: store, ID: id, Locator: locator, Family: family, File: base, Size: size, Kind: KindOf(store, locator)}
 	o.Binding, err = choose(native, accept)

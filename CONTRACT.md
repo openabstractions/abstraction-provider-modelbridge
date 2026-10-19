@@ -14,6 +14,8 @@ Binds: [lend.thrift](https://github.com/openabstractions/abstraction-storage/blo
 
 ## Reading this page
 
+The conventions every OA contract carries are stated once in [CONVENTIONS.md](https://github.com/openabstractions/abstractions/blob/main/idl/CONVENTIONS.md); a rule here that applies one cites its `CONV-` id.
+
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
 "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this
 document are to be interpreted as described in BCP 14 [RFC2119] [RFC8174]
@@ -218,7 +220,7 @@ own engine. A lend is taken back under the right that placed it.
 
 **[MODELBRIDGE-L14] The peer check.** Applications never reach this service
 directly. Their calls travel through the runtime, which binds the caller
-from the connection's program proof, decides the rule, and forwards. The
+from the connection's [program proof](https://openabstractions.github.io/reference.html#concept-identity.listener-program-need), decides the rule, and forwards. The
 provider listens on the shared identity-bound transport and admits only the
 runtime executable beside its installed program, including the windowless
 runtime on Windows. `--runtime-program` names an explicit executable for a
@@ -259,6 +261,12 @@ MUST be at most 256 bytes and name a retained page position, and an unknown
 one is `invalid`. The ledger holds at most 1024 entries. A `store`, `object`
 or `engine` that is empty or longer than 256, 1024 and 64 bytes is `invalid`.
 
+Continuations are opaque and bound to one provider instance. A malformed
+continuation, one from another instance or a restart, and an unbound
+offset continuation answer the published `lend@1` outcome `invalid`. Resume
+listing with an empty continuation. This interface's closed outcome vocabulary
+retains that word for an expired continuation.
+
 **[MODELBRIDGE-L16] No content identity by bytes.** For a link, the service
 MUST NOT read model bytes beyond the four header bytes MODELBRIDGE-L20 and
 MODELBRIDGE-L21 read to classify a file whose name states no model format. A requested copy reads those bytes to write the
@@ -277,6 +285,20 @@ operator right the runtime writes for its own operator programs, never
 granted to an application by a first-use question.
 
 ## Divergences
+
+The published Go `Lemonade.Accept` nil-Client fallback remains an unverified
+compatibility path. Installed `modelbridged` supplies an explicit refusing
+client because its current settings have only a Base and no trusted engine
+program binding. It cannot establish that binding from the listener or product
+name alone. Lemonade lending in that producer remains unavailable until the
+existing trusted registration/observation evidence is supplied. Explicit native
+composition can supply the kit's verified client. The fixed published construction
+site and the installed explicit-client path are checked by
+`scripts.provider_kit_test`; no new wire or grant is introduced.
+Publication authority: annotated
+`published/abstraction-provider-modelbridge/5ecfa96fc55c666ae5ec1f6adfb19bf2b1c045a8`
+maps to private source `b7457dbd834b3b5cd602e318edb873570a395d4f`, where
+`go/bridge/engine.go:73,92,99` documents and implements the nil-Client default.
 
 - **MODELBRIDGE-L14 against `not_permitted` and `forbidden`.** The
   boundary's own peer check — a caller of a different account — and a

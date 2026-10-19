@@ -17,9 +17,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
+	"github.com/openabstractions/abstraction-facade/go-core/bootstrap"
 	identity "github.com/openabstractions/abstraction-identity"
-	"github.com/openabstractions/abstraction-identity/listen"
+	"github.com/openabstractions/abstraction-provider-kit/go/modelobserver"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/source"
 
 	"github.com/openabstractions/abstraction-provider-modelbridge/go/bridge"
@@ -49,8 +52,11 @@ Commands:
   help       print this help (also -h, --help, or no arguments)
 
 Options:
+  Endpoint shortcuts use [a-z0-9-]+. Absolute paths and full named pipes are
+  used verbatim. Other short spellings (dot, underscore, uppercase, spaces)
+  are no longer shortcuts; use the runtime-assigned explicit endpoint path.
   --endpoint NAME       local endpoint name; the platform endpoint is
-                        \\.\pipe\openabstractions-NAME on Windows and a socket
+                        \\.\pipe\openabstractions-user-<SID>-NAME on Windows and a socket
                         in a per-account directory elsewhere
   --runtime-program P   absolute path of the runtime executable permitted to
                         call; default is the installed runtime beside this
@@ -138,9 +144,13 @@ func compose(state, config, home, lemonadeBase string, getenv func(string) strin
 	if err != nil {
 		return nil, err
 	}
+	// This producer has only a Base, with no trusted engine program binding.
+	// Keep the published library default, but never select it in installed code.
+	engineClient := modelobserver.NewClient(nil)
+	engineClient.Timeout = 10 * time.Second
 	engines := []bridge.Engine{
 		bridge.LMStudio{Env: env},
-		bridge.Lemonade{Directory: filepath.Join(state, "lent", "lemonade"), Base: lemonadeBase},
+		bridge.Lemonade{Directory: filepath.Join(state, "lent", "lemonade"), Base: lemonadeBase, Client: engineClient},
 		bridge.ComfyUI{Env: env},
 	}
 	return bridge.New(bridge.NewLocalStores(env), ledger, bridge.OSLinker(), engines...), nil
@@ -171,6 +181,12 @@ func runServe(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		fmt.Fprint(stderr, "modelbridged serve: --endpoint is required\n\n"+usage)
 		return 2
 	}
+	address, err := serveEndpoint(*endpoint)
+	if err != nil {
+		//unchecked: stderr failure cannot change this pre-provider refusal
+		fmt.Fprintf(stderr, "modelbridged serve: %v\n", err)
+		return 2
+	}
 	programs, err := trustedRuntimePrograms(*runtimeProgram)
 	if err != nil {
 		//unchecked: failed stderr is only a lost diagnostic; exit status 2 still refuses to start the provider
@@ -183,7 +199,7 @@ func runServe(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		fmt.Fprintf(stderr, "modelbridged serve: %v\n", err)
 		return 2
 	}
-	host, err := service.Listen(listen.Endpoint(*endpoint), b, programs...)
+	host, err := service.Listen(address, b, programs...)
 	if err != nil {
 		//unchecked: CLI output; the process exit code, not a returned error, already reports the outcome
 		fmt.Fprintf(stderr, "modelbridged serve: %v\n", err)
@@ -196,7 +212,7 @@ func runServe(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	//unchecked: CLI output; the process exit code, not a returned error, already reports the outcome
-	fmt.Fprintf(stdout, "modelbridged serving abstraction.storage/lend@1 on %s\n", listen.Endpoint(*endpoint))
+	fmt.Fprintf(stdout, "modelbridged serving abstraction.storage/lend@1 on %s\n", address)
 	if err := host.Serve(ctx); err != nil {
 		//unchecked: CLI output; the process exit code, not a returned error, already reports the outcome
 		fmt.Fprintf(stderr, "modelbridged serve: %v\n", err)
@@ -312,4 +328,17 @@ func userHome(getenv func(string) string) string {
 	//unchecked: a failure just leaves h empty, which the caller (compose) already checks and reports as "no home directory"
 	h, _ := os.UserHomeDir()
 	return h
+}
+
+// serveEndpoint routes CLI input only; bootstrap owns account placement.
+func serveEndpoint(value string) (string, error) {
+	windowsDrive := len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	if filepath.IsAbs(value) || strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\\`) || windowsDrive {
+		return value, nil
+	}
+	address, err := bootstrap.Endpoint(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve short endpoint (names use [a-z0-9-]+; use an explicit absolute endpoint path for other names): %w", err)
+	}
+	return address, nil
 }

@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
+	cursorcodec "github.com/openabstractions/abstraction-watch/go/cursor"
 )
 
 // MaxPage is the largest page Lends answers, as the contract states.
@@ -31,6 +31,9 @@ type Bridge struct {
 	ledger  *Ledger
 	engines []Engine
 	linker  Linker
+	// epoch binds continuations to this bridge instance. An empty epoch records
+	// failure to obtain its identity and makes listing unavailable.
+	epoch string
 	// now stamps entries; nil uses the clock.
 	now func() time.Time
 }
@@ -38,7 +41,11 @@ type Bridge struct {
 // New composes a bridge over one source, one ledger and the engines this
 // machine has.
 func New(src Source, ledger *Ledger, linker Linker, engines ...Engine) *Bridge {
-	return &Bridge{source: src, ledger: ledger, engines: engines, linker: linker}
+	epoch, err := NewEntryID()
+	if err != nil {
+		epoch = ""
+	}
+	return &Bridge{source: src, ledger: ledger, engines: engines, linker: linker, epoch: epoch}
 }
 
 // Engines is every engine name this provider supports, in declaration order.
@@ -63,7 +70,7 @@ func (b *Bridge) stamp() string {
 	if b.now != nil {
 		at = b.now
 	}
-	return at().UTC().Format("2006-01-02T15:04:05.000000Z")
+	return wire.FormatTimestamp(at())
 }
 
 func refuseLend(outcome wire.LendOutcome, detail string) wire.LendResult {
@@ -325,17 +332,21 @@ func (b *Bridge) Lends(continuation string, limit int64) wire.LendPage {
 	refuse := func(outcome wire.LendsOutcome) wire.LendPage {
 		return wire.LendPage{Outcome: outcome, Lends: []wire.Lend{}}
 	}
-	if limit < 1 || limit > MaxPage {
+	if limit < 1 || limit > MaxPage || len(continuation) > 256 {
 		return refuse(wire.LendsOutcomeInvalid)
+	}
+	if b.epoch == "" {
+		return refuse(wire.LendsOutcomeUnavailable)
 	}
 	all := b.ledger.All()
 	from := 0
 	if continuation != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(continuation)
-		if err != nil {
+		envelope, ok := (cursorcodec.Codec{Separator: ":"}).Parse(continuation)
+		if !ok || !envelope.Bound(b.epoch, "") {
 			return refuse(wire.LendsOutcomeInvalid)
 		}
-		from, err = strconv.Atoi(string(raw))
+		var err error
+		from, err = strconv.Atoi(envelope.Payload)
 		if err != nil || from < 0 || from > len(all) {
 			return refuse(wire.LendsOutcomeInvalid)
 		}
@@ -346,7 +357,7 @@ func (b *Bridge) Lends(continuation string, limit int64) wire.LendPage {
 		page.Lends = []wire.Lend{}
 	}
 	if !page.Complete {
-		page.Continuation = base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(to)))
+		page.Continuation = (cursorcodec.Codec{Separator: ":"}).Encode(cursorcodec.Envelope{Epoch: b.epoch, Payload: strconv.Itoa(to)})
 	}
 	return page
 }

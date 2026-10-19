@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -40,7 +39,7 @@ type Host struct {
 	cancel   context.CancelFunc
 	once     sync.Once
 	workers  sync.WaitGroup
-	slots    chan struct{}
+	slots    listen.CallAdmission
 
 	lifecycle sync.Mutex
 	serving   bool
@@ -76,7 +75,7 @@ func Listen(endpoint string, b *bridge.Bridge, programs ...string) (*Host, error
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Host{bridge: b, listener: listen.Sessions(l, listen.SessionOptions{MaxSessions: 8}), owner: owner.Uid, programs: allowed, ctx: ctx, cancel: cancel, slots: make(chan struct{}, 8)}, nil
+	return &Host{bridge: b, listener: listen.Sessions(l, listen.SessionOptions{MaxSessions: 8}), owner: owner.Uid, programs: allowed, ctx: ctx, cancel: cancel, slots: listen.NewCallAdmission(8)}, nil
 }
 
 // Close stops accepting and ends calls in progress.
@@ -108,17 +107,14 @@ func (h *Host) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		select {
-		case h.slots <- struct{}{}:
-		default:
-			//unchecked: dropping a connection because the worker slots are full; nothing here can act on a failed close of the connection it is already refusing
-			conn.Close()
+		release, admitted := h.slots.Take(conn)
+		if !admitted {
 			continue
 		}
 		h.workers.Add(1)
 		go func() {
 			defer h.workers.Done()
-			defer func() { <-h.slots }()
+			defer release()
 			defer conn.Close()
 			callCtx, cancel := context.WithTimeout(h.ctx, callBudget)
 			defer cancel()
@@ -160,19 +156,15 @@ func (r *receiver) admit() (forbidden bool, err error) {
 }
 
 func (h *Host) admits(peer *identity.Peer) (forbidden bool, err error) {
-	u, err := peer.User.AtLeast(listen.Program.User)
-	if err != nil {
+	_, verdict := identity.AdmitOwner(peer, identity.Need{User: listen.Program.User}, h.owner)
+	if verdict == identity.OwnerIdentityRequired || verdict == identity.OwnerUnavailable {
 		return false, &wire.ServiceError{Code: wire.ServiceErrorCodeIdentityRequired}
 	}
-	principal := ""
-	switch u.Kind {
-	case "windows":
-		principal = u.SID
-	case "posix":
-		principal = strconv.Itoa(u.UID)
-	}
-	if principal == "" || principal != h.owner {
+	if verdict == identity.OwnerOtherAccount {
 		return true, nil
+	}
+	if verdict != identity.OwnerAdmitted {
+		return false, &wire.ServiceError{Code: wire.ServiceErrorCodeCallerUnavailable}
 	}
 	program, err := identity.SubjectProgram(peer, listen.Program.Path)
 	if err != nil {

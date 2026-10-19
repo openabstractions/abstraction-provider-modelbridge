@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/openabstractions/abstraction-identity/go/privatedir/privatetest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +21,7 @@ func serviceEndpoint(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf(`\\.\pipe\modelbridge-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	}
-	return filepath.Join(t.TempDir(), "service.sock")
+	return filepath.Join(privatetest.SocketDir(t), "service.sock")
 }
 
 func TestOnlyDesignatedRuntimeCallsLending(t *testing.T) {
@@ -32,7 +33,7 @@ func TestOnlyDesignatedRuntimeCallsLending(t *testing.T) {
 		t.Fatal(err)
 	}
 	self = identity.CanonicalProgramPath(filepath.Clean(self))
-	ledger, err := bridge.OpenLedger(filepath.Join(t.TempDir(), "lends.json"))
+	ledger, err := bridge.OpenLedger(filepath.Join(privatetest.Dir(t), "lends.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,7 @@ func TestOnlyDesignatedRuntimeCallsLending(t *testing.T) {
 		wantList         wire.LendsOutcome
 		wantLend         wire.LendOutcome
 	}{
-		{"same account, other program", filepath.Join(t.TempDir(), "another-runtime"), wire.LendsOutcomeNotPermitted, wire.LendOutcomeNotPermitted},
+		{"same account, other program", filepath.Join(privatetest.Dir(t), "another-runtime"), wire.LendsOutcomeNotPermitted, wire.LendOutcomeNotPermitted},
 		{"designated runtime", self, wire.LendsOutcomePage, wire.LendOutcomeInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

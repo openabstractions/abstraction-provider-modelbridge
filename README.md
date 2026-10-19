@@ -36,6 +36,14 @@ modelbridged lends --state DIR
 modelbridged help
 ```
 
+`--endpoint` short names use `[a-z0-9-]+` and resolve through the current
+account's bootstrap namespace. Absolute endpoint paths and full Windows named
+pipes are passed verbatim, including runtime-assigned provider paths. Dots,
+underscores, uppercase letters and spaces formerly passed through the CLI's
+unrestricted short-name interpolation; they now require an explicit path.
+This CLI shortcut restriction does not change registered provider-name grammar.
+
+
 `serve` answers `Lend`, `Unlend` and `Lends` on the named local endpoint
 until interrupted. It accepts only the installed runtime executable beside
 the provider, including the windowless executable on Windows. Pass
