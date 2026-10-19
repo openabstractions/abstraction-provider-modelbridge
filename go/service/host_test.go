@@ -11,8 +11,8 @@ import (
 
 	identity "github.com/openabstractions/abstraction-identity"
 	"github.com/openabstractions/abstraction-identity/listen"
-	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 	"github.com/openabstractions/abstraction-provider-modelbridge/go/bridge"
+	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 )
 
 func serviceEndpoint(t *testing.T) string {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/openabstractions/abstraction-facade/go-core/redact"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/adapters/comfyui"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/adapters/lmstudio"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/source"
@@ -110,7 +111,9 @@ func (e Lemonade) Accept(root string) error {
 	//unchecked: detail is best-effort diagnostic text for the error message below; a partial read on failure still shows useful content
 	detail, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("Lemonade at %s refused extra_models_dir: %s %s", e.Base, response.Status, bytes.TrimSpace(detail))
+		// Lemonade's reply reaches the lend's detail only as redact.Line
+		// makes it.
+		return fmt.Errorf("Lemonade at %s refused extra_models_dir: %s %s", e.Base, response.Status, redact.Line(string(detail), 0))
 	}
 	return nil
 }

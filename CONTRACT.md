@@ -38,10 +38,37 @@ the release it left.
 the storage inventory names it: a store and an id, never a path. `Lend`
 takes `store` and `object`. `object` is a manifest id, the name that store
 gives that manifest, or an object locator, as `abstraction.storage/inventory@1`
-reports them. The service resolves the id to a file on this machine through
-a source; the catalogue carries no path and no caller supplies one. An id no
-store the service reads holds is `unknown_object`. The ledger records the
-manifest id where the source published one, and the locator otherwise.
+reports them. The service resolves the id to a binding on this machine
+through a source (MODELBRIDGE-L19); the catalogue carries no path and no
+caller supplies one. An id no store the service reads holds is
+`unknown_object`. The ledger records the manifest id where the source
+published one, and the locator otherwise.
+
+**[MODELBRIDGE-L19] An object resolves to a binding with a kind.** The
+source's `Resolve` MUST answer a store and an id with a binding of one of
+these kinds, never with a bare path
+(`research/model-locators/DECISION.md` §7 rule 2, VISION 2026-10-01):
+`file` (a path), `region` (a path, an offset and a length: a STORED,
+unencrypted zip member inside STORED zips only), `compressed` (the
+container, the member names from the container inward, the method, and its
+stored stream's offset in the container file, stored size and CRC-32),
+`memory` and `device`. No source answers `memory`: the inference provider
+kit's fill produces it from a `file`, `region` or `compressed` binding
+(inference CONTRACT.md INF-MS1..INF-MS6), with the section's handle in the
+provider host, its length, digest and chunk digests, and the binding it was
+filled from. Nothing produces `device` yet. Each
+caller MUST declare the kinds its engine reads, and a region's alignment;
+the source MUST answer only a declared kind, choosing in the order
+`region`, `file`, `memory`, and MUST refuse an object no declared kind
+reaches without materialization. A loose file is a `file`, and a `region`
+from offset zero to a caller reading regions only. The source MUST re-read a
+container's central directory on every resolution and MUST NOT read or
+hash a member's bytes to bind it. A binding is provider-side data: it
+never reaches an application, the ledger or a contract field. `Lend`
+declares `file` only, because a link names a whole file; a member of a
+container is `link_refused`, with or without `copy`, until materialization
+is built. The model host declares `file` only for `llama-server` at its pinned
+release (abstraction-provider-modelhost CONTRACT.md MODELHOST-L1).
 
 **[MODELBRIDGE-L2] Engine naming.** An engine is a registered model server's
 name. `lmstudio`, `lemonade` and `comfyui` are the engines this service
@@ -49,6 +76,38 @@ names. An engine the service does not lend to, and an engine whose own
 configuration cannot be pointed at the lent directory without a person
 editing its configuration file, are both `unsupported_engine`, with the
 reason in `detail`.
+
+**[MODELBRIDGE-L20] A pickle is never bound.** OA never loads a pickle
+(VISION 2026-10-01, the third-party review rule). Every source's `Resolve`
+MUST refuse, for every caller and every accepted kind, an object the
+storage reader's pickle rule classifies as one
+(storage-over-local-stores CONTRACT.md LS-1: a file named `.pth`, `.pt`,
+`.ckpt`, `.pkl` or `.pickle`, or a weight `.bin` whose header is neither
+GGUF's magic nor whisper.cpp's ggml magic `lmgg`; a container member by its
+name alone, LS-9), whether the caller names it by locator, by
+manifest id or by name. To classify a loose `.bin` the source reads at most
+its first four bytes. `Lend` answers that refusal `not_permitted` with a
+`detail` that opens with the reason `object:pickle`, with or without `copy`,
+and writes nothing. The model host answers it `unavailable` with reason
+`object:pickle:<store>/<id>` before any lease
+(abstraction-provider-modelhost CONTRACT.md MODELHOST-L1).
+
+**[MODELBRIDGE-L21] Only a model format is bound.** The source's `Resolve`
+MUST bind only an object in a model format OA loads: GGUF (`.gguf`, or any
+file whose first four bytes are GGUF's magic, such as an Ollama blob or a
+GGUF `.bin`), whisper.cpp's ggml (any file whose first four bytes are
+`lmgg`, such as `ggml-medium.bin`), safetensors (`.safetensors`, `.sft`),
+ONNX (`.onnx`) and FastFlowLM's `.q4nx`. A container member is judged by its name alone
+(storage-over-local-stores CONTRACT.md LS-9), so a GGUF `.bin` member is
+refused as a pickle. A manifest's object is its entry with role `weights`,
+or failing one, its entry with role `projector` or `vae`; a manifest with
+none of these (a Hugging Face snapshot of configuration files or a `.pkl`,
+say) names no object. An object in no model format, and a manifest naming
+none, is `unknown_object`; a pickle is MODELBRIDGE-L20's refusal. To judge a
+name that states no format the source reads at most four bytes, from a
+regular file only: it opens without waiting (non-blocking on Unix, where a
+FIFO's open would wait for a writer while `Lend` holds its lock) and checks
+the opened handle, and a FIFO, device or directory is in no model format.
 
 ## The link
 
@@ -175,10 +234,12 @@ with the error code `caller_unavailable`, one below Program proof fails with
 | --- | --- | --- |
 | `Lend` | `lent` | The link was placed and the ledger holds the entry. |
 | `Lend` | `not_permitted` | No rule lets the calling program lend to this engine (MODELBRIDGE-L12). |
+| `Lend` | `not_permitted`, `detail` `object:pickle: …` | The object is a PyTorch pickle, which OA never loads or lends (MODELBRIDGE-L20). |
+| `Lend` | `link_refused` | The object is a member of a container, which a link cannot point into (MODELBRIDGE-L19). |
 | `Lend` | `unsupported_engine` | The engine is not one this service lends to, or its configuration cannot be pointed at the lent directory without a person editing it (MODELBRIDGE-L2, MODELBRIDGE-L18). |
 | `Lend` | `link_refused` | Neither a symbolic nor a hard link could be placed (MODELBRIDGE-L3). |
 | `Lend` | `already_lent` | The object is already in force at that engine; the entry that holds it is returned (MODELBRIDGE-L10). |
-| `Lend` | `unknown_object` | No store this service reads holds the id (MODELBRIDGE-L1). |
+| `Lend` | `unknown_object` | No store this service reads holds the id, or what it names is in no model format OA loads (MODELBRIDGE-L1, MODELBRIDGE-L21). |
 | `Lend` | `invalid` | A `store`, `object` or `engine` argument is empty or over its bound (Bounds). |
 | `Lend` | `unavailable` | The ledger could not be written, a staged artifact needs reconciliation, or the peer identity was not established (MODELBRIDGE-L5, MODELBRIDGE-L9, MODELBRIDGE-L14). |
 | `Unlend` | `unlent` | The link and every directory this lend created are gone, the entry has left the ledger (MODELBRIDGE-L11). |
@@ -199,7 +260,8 @@ one is `invalid`. The ledger holds at most 1024 entries. A `store`, `object`
 or `engine` that is empty or longer than 256, 1024 and 64 bytes is `invalid`.
 
 **[MODELBRIDGE-L16] No content identity by bytes.** For a link, the service
-MUST NOT read model bytes. A requested copy reads those bytes to write the
+MUST NOT read model bytes beyond the four header bytes MODELBRIDGE-L20 and
+MODELBRIDGE-L21 read to classify a file whose name states no model format. A requested copy reads those bytes to write the
 copy (MODELBRIDGE-L4). The service MUST NOT hash model contents. It may hash
 its own small path string to name a recovery quarantine.
 
@@ -227,6 +289,10 @@ granted to an application by a first-use question.
 
 ## Not built
 
+Materialization of a `region` or `compressed` binding into a counted
+`file` (a block clone, or one copy in the `cache` storage class) and `lend@1`'s
+`clone` link are `research/model-locators/DECISION.md` §9 step 3; until they
+land, a container member reaches no engine (MODELBRIDGE-L19).
 `Lend` names no engine process: it neither starts nor stops one. Spawning an
 engine for a file no installed engine can serve is DECISION.md rule 4's
 third step and belongs to a later slice. MODELBRIDGE-L18 classifies a kind

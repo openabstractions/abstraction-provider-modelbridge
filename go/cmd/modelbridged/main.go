@@ -2,7 +2,9 @@
 // an engine installed here, by link, and keeps the ledger that says which
 // lends are in force. It serves abstraction.storage/lend@1 to the runtime,
 // which decides each application's right and forwards. It never moves,
-// renames or deletes an original, and it reads no bytes of any model.
+// renames or deletes an original. Of a model's bytes it reads only the first
+// four of a file whose name states no model format, to tell GGUF from a
+// pickle (MODELBRIDGE-L16, MODELBRIDGE-L21).
 package main
 
 import (

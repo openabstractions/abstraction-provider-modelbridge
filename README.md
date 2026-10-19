@@ -1,10 +1,14 @@
 # abstraction-provider-modelbridge
 
-**Status: development provider for OA 0.3.0, with its first tagged release
-in preparation.** The repository exists. Build it in the OA development
-workspace while its dependency versions are being prepared. The
-[installation guide](https://openabstractions.org/adopt.html) describes the
-available release packages; the source instructions below describe this provider.
+*For operators and provider authors. Applications reach it through the OA
+runtime.*
+
+This provider lets an engine on this machine use a model file that another
+app here already holds, by linking to the file where it lies.
+
+**What's new here:** A model file one application downloaded is served by
+another application's engine through a link, recorded in a ledger and reversed
+by `unlend`, with no second copy.
 
 abstraction-provider-modelbridge is the model bridge: it **lends** a model
 file one store on this machine already holds to an engine installed here,
@@ -218,8 +222,9 @@ startup.
 ## Layout
 
 - **`go/bridge/`** — the operation. `object.go` resolves the inventory's
-  naming (a store and an id) to a file on this machine and derives the
-  family name a lend uses; `link.go` places one link and prunes what a lend
+  naming (a store and an id) to a binding on this machine, a file or a
+  region or compressed member of a zip as `binding.go` defines them
+  (MODELBRIDGE-L19), and derives the family name a lend uses; `link.go` places one link and prunes what a lend
   created; `ledger.go` is the record, written in one rename; `engine.go` is
   LM Studio, Lemonade and ComfyUI; `bridge.go` is `Lend`, `Unlend` and
   `Lends` and their typed refusals.
@@ -244,6 +249,14 @@ startup.
   closes the descriptor keys the ledger could record; the field is not yet
   built (CONTRACT.md "Not built").
 - Nothing here bundles an engine or a model.
+
+## Status
+
+Development provider for OA 0.3.0. The
+[Go source release](https://github.com/openabstractions/abstraction-provider-modelbridge/releases/tag/go/v0.1.0)
+is tagged `go/v0.1.0`. This repository has no standalone release assets. The
+[installation guide](https://openabstractions.org/adopt.html) describes the
+available release packages; the source instructions above describe this provider.
 
 ## Licence
 

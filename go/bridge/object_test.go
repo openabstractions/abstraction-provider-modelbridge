@@ -50,7 +50,7 @@ func descriptorFixture(t *testing.T, family string) (*bridge.LocalStores, engine
 
 func TestLocalStoresUsesDescriptorFamilyForGenericLend(t *testing.T) {
 	src, eng, ledgerPath := descriptorFixture(t, "canonical-family")
-	object, ok := src.Resolve("jan", "manifest-1")
+	object, ok := resolve(src, "jan", "manifest-1")
 	if !ok || object.Family != "canonical-family" {
 		t.Fatalf("resolved descriptor family: %+v, %v", object, ok)
 	}
@@ -76,7 +76,7 @@ func TestLocalStoresFamilyFallbackAndHostileDescriptor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src, _, _ := descriptorFixture(t, tc.family)
-			object, ok := src.Resolve("jan", "manifest-1")
+			object, ok := resolve(src, "jan", "manifest-1")
 			if ok != tc.ok || (ok && object.Family != tc.want) {
 				t.Fatalf("resolved family: %+v, %v; want %q, %v", object, ok, tc.want, tc.ok)
 			}
@@ -89,12 +89,12 @@ func TestLocalStoresDoesNotApplyDescriptorFamilyToOtherKindsOrStrayObjects(t *te
 	a := src.Adapters[0].(descriptorStore)
 	a.manifest.Kind = "abstraction.storage/object@1"
 	src.Adapters[0] = a
-	if object, ok := src.Resolve("jan", "manifest-1"); !ok || object.Family != "other" {
+	if object, ok := resolve(src, "jan", "manifest-1"); !ok || object.Family != "other" {
 		t.Fatalf("non-model manifest fallback: %+v, %v", object, ok)
 	}
 	a.stray = true
 	src.Adapters[0] = a
-	if object, ok := src.Resolve("jan", "model.gguf"); !ok || object.Family != "model" {
+	if object, ok := resolve(src, "jan", "model.gguf"); !ok || object.Family != "model" {
 		t.Fatalf("stray object fallback: %+v, %v", object, ok)
 	}
 }

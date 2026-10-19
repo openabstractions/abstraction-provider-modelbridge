@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/openabstractions/abstraction-facade/go-core/redact/redacttest"
 	"github.com/openabstractions/abstraction-provider-modelbridge/go/bridge"
 	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 )
@@ -30,19 +32,27 @@ func (s store) Root(name string) string {
 	return ""
 }
 
-func (s store) Resolve(name, id string) (bridge.Object, bool) {
+func (s store) Resolve(name, id string, _ bridge.Accepts) (bridge.Object, error) {
 	locator, ok := s.objects[id]
 	if name != s.name || !ok {
-		return bridge.Object{}, false
+		return bridge.Object{}, bridge.ErrUnknownObject
 	}
 	path := filepath.Join(s.root, filepath.FromSlash(locator))
 	info, err := os.Stat(path)
 	if err != nil {
-		return bridge.Object{}, false
+		return bridge.Object{}, bridge.ErrUnknownObject
 	}
 	base := filepath.Base(locator)
 	return bridge.Object{Store: name, ID: id, Locator: locator, Path: path,
-		Family: bridge.Family(base), File: base, Size: info.Size(), Kind: bridge.KindOf(name, locator)}, true
+		Binding: bridge.ObjectBinding{Kind: bridge.BindFile, Path: path, Length: info.Size()},
+		Family:  bridge.Family(base), File: base, Size: info.Size(), Kind: bridge.KindOf(name, locator)}, nil
+}
+
+// resolve asks src for a file, as every caller of Resolve did before
+// bindings had kinds.
+func resolve(src bridge.Source, store, id string) (bridge.Object, bool) {
+	object, err := src.Resolve(store, id, bridge.FileOnly)
+	return object, err == nil
 }
 
 // engine is a directory standing in for an installed engine's own models
@@ -103,7 +113,7 @@ func TestUnrecordedDestinationIsRefusedWithoutInventingALend(t *testing.T) {
 	for _, duringPlacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "existing", true: "racing"}[duringPlacement], func(t *testing.T) {
 			src, eng, ledgerPath := machine(t)
-			object, _ := src.Resolve("huggingface", "manifest-1")
+			object, _ := resolve(src, "huggingface", "manifest-1")
 			destination := filepath.Join(eng.root, object.Family, object.File)
 			plant := func() {
 				if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
@@ -695,10 +705,39 @@ func TestLemonadeIsPointedAtTheLentDirectoryThroughItsOwnEndpoint(t *testing.T) 
 	if _, err := (bridge.Lemonade{Directory: directory}).Root(bridge.Object{}); err == nil {
 		t.Fatal("a Lemonade with no address was accepted")
 	}
-	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
+	// The refusal's reply text reaches the error only through redact.Line.
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("{\"error\": \"denied\", \"api_key\": \"fixtureSECRET value\"}\n\x1b[31mBearer fixtureTOKEN"))
+	}))
 	defer refusing.Close()
-	if err := (bridge.Lemonade{Directory: directory, Base: refusing.URL}).Accept(directory); err == nil {
+	err = (bridge.Lemonade{Directory: directory, Base: refusing.URL}).Accept(directory)
+	if err == nil {
 		t.Fatal("a Lemonade that refused the setting was accepted")
+	}
+	if text := err.Error(); strings.Contains(text, "fixtureSECRET") || strings.Contains(text, "fixtureTOKEN") ||
+		strings.ContainsRune(text, 0x1b) || !strings.Contains(text, `"error": "denied"`) {
+		t.Fatalf("the refusal %q carries Lemonade's credential or an escape, or drops its words", text)
+	}
+	// Every row of the shared bypass table as Lemonade's reply reaches the
+	// lend's detail as the owner answers it.
+	for _, c := range redacttest.Cases {
+		body := c.In
+		replying := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(body))
+		}))
+		err := (bridge.Lemonade{Directory: directory, Base: replying.URL}).Accept(directory)
+		replying.Close()
+		if err == nil || !strings.HasSuffix(err.Error(), c.Want) {
+			t.Errorf("Lemonade replying %q: %v, want the detail %q", c.In, err, c.Want)
+			continue
+		}
+		for _, secret := range redacttest.Secrets {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("Lemonade replying %q: %q keeps %q", c.In, err, secret)
+			}
+		}
 	}
 }
 

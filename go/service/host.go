@@ -8,17 +8,15 @@ import (
 	"errors"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	identity "github.com/openabstractions/abstraction-identity"
 	"github.com/openabstractions/abstraction-identity/listen"
 
-	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 	"github.com/openabstractions/abstraction-provider-modelbridge/go/bridge"
+	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 )
 
 // MaxFrameBytes bounds one request or reply frame. A page of 256 ledger
@@ -181,7 +179,7 @@ func (h *Host) admits(peer *identity.Peer) (forbidden bool, err error) {
 		return false, &wire.ServiceError{Code: wire.ServiceErrorCodeIdentityRequired}
 	}
 	for _, allowed := range h.programs {
-		if program == allowed || runtime.GOOS == "windows" && strings.EqualFold(program, allowed) {
+		if identity.SameSubjectProgram(program, allowed) {
 			return false, nil
 		}
 	}

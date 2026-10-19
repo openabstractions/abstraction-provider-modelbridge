@@ -30,6 +30,17 @@ Linked from [CONTRACT.md](CONTRACT.md)'s "Reading this page."
 | `LEND-17` | MODELBRIDGE-L17 | the ledger is an operator record |
 | `LEND-18` | MODELBRIDGE-L18 | ComfyUI's folders |
 
+### The memory binding gains its fields, 2026-10-01
+
+The inference provider kit fills a model into a read-only memory section
+(VISION 2026-10-01, `research/model-locators/MEMORY-LENDING.md`, inference
+INF-MS1..INF-MS6), and the binding kinds this service declared gained what
+that fill reads and produces.
+
+| id | before | now |
+| --- | --- | --- |
+| MODELBRIDGE-L19 | `compressed` carried the container, the member chain and the method; nothing produced `memory` | `compressed` also carries its stream's offset in the container file, its stored size and CRC-32; `memory` is produced by the provider kit's fill, with the section handle, length, digest, chunk digests and the binding it was filled from; no source answers it |
+
 ## Measured
 
 - **`TestLiveLendTheSmallestGGUFToLMStudio`** (`OA_LIVE_LEND=1`), 2026-09-22:
@@ -79,6 +90,32 @@ Linked from [CONTRACT.md](CONTRACT.md)'s "Reading this page."
 - `research/reviews/providers-2026-09-23.md` F9 — LEND-8's ceiling was
   stated as a fact this service enforces. Reworded to name it as the
   measured machine's own LM Studio setting.
+- Review of `42e34a90f` (2026-10-01), blocking — `weights()` fell back to a
+  manifest's first entry with any locator, so a Hugging Face snapshot
+  holding only `checkpoint.pkl` and `config.json` resolved to a file, and a
+  STORED nested `torch.zip` (a torch.save checkpoint) resolved to a region.
+  MODELBRIDGE-L21 binds only a model format and limits the fallback to the
+  `projector` and `vae` roles; `.pkl` and `.pickle` join MODELBRIDGE-L20's
+  pickle names as a second guard. Regressions `TestASnapshotManifestWithNoWeightsIsNotBound`
+  and `TestANestedTorchZipIsNotBound` fail with the previous `object.go`
+  overlaid.
+- Review of `05fb3042e` (2026-10-01), hardening — the four-byte header read
+  opened any path, and a FIFO where an Ollama blob should be would block
+  `open(2)` on Unix while `Lend` held the bridge's lock. The read now opens
+  non-blocking on Unix and requires the opened handle to be a regular file
+  (MODELBRIDGE-L21). `TestAFIFOObjectIsNotBoundAndDoesNotBlock` blocked with
+  the previous `source/manifest.go` overlaid, under Linux.
+- Review of `f15572bf2` (2026-10-01), decided by the coordinator —
+  whisper.cpp's ggml `.bin` (magic `lmgg`) holds tensors and a vocabulary
+  and no code. MODELBRIDGE-L20 no longer counts it a pickle and
+  MODELBRIDGE-L21 binds it as the `ggml` format, through storage
+  `source.IsPickle` and `source.ModelFormatOf` (LS-1, LS-2), the one owner
+  of both rules. `TestLendRefusesPickles` resolves a ggml `.bin` beside the
+  refused pickles.
+- Same review as `42e34a90f` — 0.3.0 published this module as source with no pickle rule
+  and with `.pth` and `.ckpt` files as manifests, so a self-built
+  `modelbridged` could have lent a pickle. No 0.3.0 package installed or
+  registered `modelbridged`; reconciling such ledger entries is a TODO row.
 
 ## Reviewed and deferred
 

@@ -7,8 +7,8 @@ import (
 
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/source"
 
-	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 	"github.com/openabstractions/abstraction-provider-modelbridge/go/bridge"
+	wire "github.com/openabstractions/abstraction-storage/go/abstraction/storage/lend"
 )
 
 // comfyuiEnv is a ComfyUI engine pointed at one operator-configured install
@@ -170,7 +170,8 @@ func TestLendRefusesAKindComfyUIHasNoFolderFor(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(src, "hypernetworks"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	locator := "hypernetworks/style.pt"
+	// Safetensors: a pickle would be refused first (MODELBRIDGE-L20).
+	locator := "hypernetworks/style.safetensors"
 	if err := os.WriteFile(filepath.Join(src, filepath.FromSlash(locator)), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

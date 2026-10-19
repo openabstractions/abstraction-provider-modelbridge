@@ -19,6 +19,10 @@ import (
 // MaxPage is the largest page Lends answers, as the contract states.
 const MaxPage = 256
 
+// ReasonPickle opens the detail of a lend refused because its object is a
+// PyTorch pickle (MODELBRIDGE-L20).
+const ReasonPickle = "object:pickle"
+
 // Bridge is the provider's one operation: lend a file a store holds to an
 // engine installed on this machine, and take the lend back.
 type Bridge struct {
@@ -114,8 +118,18 @@ func (b *Bridge) Lend(store, id, engineName string, copy bool) wire.LendResult {
 		return refuseLend(wire.LendOutcomeUnsupportedEngine,
 			fmt.Sprintf("%s is not an engine this provider lends to; it lends to %s", engineName, strings.Join(b.Engines(), ", ")))
 	}
-	object, found := b.source.Resolve(store, id)
-	if !found {
+	// A lend is a link, and a link names a whole file (MODELBRIDGE-L3,
+	// MODELBRIDGE-L19).
+	object, err := b.source.Resolve(store, id, FileOnly)
+	if errors.Is(err, ErrPickle) {
+		return refuseLend(wire.LendOutcomeNotPermitted, fmt.Sprintf(
+			"%s: %s in store %s is a PyTorch pickle, which OA never loads or lends", ReasonPickle, id, store))
+	}
+	if errors.Is(err, ErrUnaccepted) {
+		return refuseLend(wire.LendOutcomeLinkRefused, fmt.Sprintf(
+			"%s in store %s lies inside a container: a link cannot point into one, and this provider makes no copy of a member", id, store))
+	}
+	if err != nil {
 		return refuseLend(wire.LendOutcomeUnknownObject, fmt.Sprintf("no object %s in store %s", id, store))
 	}
 	if entry, lent := b.ledger.InForce(engineName, object.Store, lentAs(object)); lent {

@@ -1,16 +1,21 @@
 // Package bridge lends a model file one store holds to an engine installed on
 // the same machine, by link, and keeps the ledger that says which lends are in
-// force. It never moves, renames or deletes an original, and it reads no bytes
-// of any model.
+// force. It never moves, renames or deletes an original. Of a model's bytes it
+// reads only the first four of a file whose name states no model format, to
+// tell GGUF from a pickle (MODELBRIDGE-L16, MODELBRIDGE-L21).
 package bridge
 
 import (
+	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
+	"github.com/openabstractions/abstraction-storage-over-local-stores/go/container"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/snapshot"
 	"github.com/openabstractions/abstraction-storage-over-local-stores/go/source"
 	content "github.com/openabstractions/abstraction-storage/go/abstraction/storage/content"
@@ -25,8 +30,12 @@ type Object struct {
 	// Locator is the object's locator inside its store, as the source spells
 	// it: provider binding data, never an application's authority.
 	Locator string
-	// Path is the absolute path on this machine.
+	// Path is the absolute path on this machine when Binding is a file, and
+	// empty for every other kind.
 	Path string
+	// Binding is how the object's bytes reach an engine: the kind the
+	// caller accepted, or, with ErrUnaccepted, the object's own kind.
+	Binding ObjectBinding
 	// Family is the descriptor's identity key when present, otherwise the
 	// name a lend derives for the engine's directory from the file or store.
 	Family string
@@ -42,12 +51,18 @@ type Object struct {
 	Kind string
 }
 
-// Source resolves the inventory's naming to a file on this machine. The
-// bridge asks a source for a path; the catalogue carries none.
+// Source resolves the inventory's naming to a binding on this machine. The
+// bridge asks a source for one; the catalogue carries none.
 type Source interface {
-	// Resolve finds the object id names in store. id is a manifest id, the
-	// name the store gives that manifest, or an object locator.
-	Resolve(store, id string) (Object, bool)
+	// Resolve finds the object id names in store and binds it in a kind
+	// accept names (MODELBRIDGE-L19). id is a manifest id, the name the
+	// store gives that manifest, or an object locator. Every Source MUST
+	// bind only an object in a model format (MODELBRIDGE-L21) and MUST
+	// answer ErrPickle for a pickle, for every caller and every kind
+	// (MODELBRIDGE-L20). An id no store holds, and an object in no model
+	// format, is ErrUnknownObject; an object no accepted kind reaches is
+	// ErrUnaccepted, with the object and its own binding returned.
+	Resolve(store, id string, accept Accepts) (Object, error)
 	// Stores is every store this source discovered, in report order.
 	Stores() []string
 	// Root is the locator of one store, empty when it has none.
@@ -88,8 +103,8 @@ func (l *LocalStores) Root(store string) string {
 
 // Resolve matches id against the manifest id, each name the store gives the
 // manifest, and each entry's locator, in that order. The first weights entry
-// of the matched manifest is the file; a stray object matches by locator.
-func (l *LocalStores) Resolve(store, id string) (Object, bool) {
+// of the matched manifest is the object; a stray object matches by locator.
+func (l *LocalStores) Resolve(store, id string, accept Accepts) (Object, error) {
 	result := l.take()
 	root := ""
 	for _, s := range result.Page.Stores {
@@ -98,7 +113,7 @@ func (l *LocalStores) Resolve(store, id string) (Object, bool) {
 		}
 	}
 	if root == "" {
-		return Object{}, false
+		return Object{}, fmt.Errorf("%w: no store %s", ErrUnknownObject, store)
 	}
 	for _, m := range result.Page.Manifests {
 		if m.Manifest.Store != store || !manifestNamed(m.Manifest, id) {
@@ -116,30 +131,84 @@ func (l *LocalStores) Resolve(store, id string) (Object, bool) {
 		if m.Manifest.Kind == "abstraction.model/descriptor@1" {
 			family = m.Manifest.Descriptor["family"]
 		}
-		return object(store, m.Manifest.ID, entry.Locator, root, name, family, entry.Size)
+		return object(store, m.Manifest.ID, entry.Locator, root, name, family, entry.Size, accept)
 	}
 	for _, o := range result.Page.Objects {
 		if o.Store == store && o.Object.Locator == id && !o.Object.Partial {
-			return object(store, "", o.Object.Locator, root, "", "", o.Object.Size)
+			return object(store, "", o.Object.Locator, root, "", "", o.Object.Size, accept)
 		}
 	}
-	return Object{}, false
+	return Object{}, fmt.Errorf("%w: no object %s in store %s", ErrUnknownObject, id, store)
 }
 
-func object(store, id, locator, root, name, descriptorFamily string, size int64) (Object, bool) {
-	rel := filepath.FromSlash(locator)
+func object(store, id, locator, root, name, descriptorFamily string, size int64, accept Accepts) (Object, error) {
 	base := path.Base(locator)
 	family := FamilyOf(name, base)
 	if descriptorFamily != "" {
 		// A descriptor is authoritative, but its key is still untrusted path
 		// data when used as one directory beneath an engine's lend root.
 		if !familyComponent(descriptorFamily) {
-			return Object{}, false
+			return Object{}, fmt.Errorf("%w: its descriptor family is no directory name", ErrUnknownObject)
 		}
 		family = descriptorFamily
 	}
-	return Object{Store: store, ID: id, Locator: locator, Path: filepath.Join(root, rel),
-		Family: family, File: base, Size: size, Kind: KindOf(store, locator)}, true
+	native, err := nativeBinding(root, locator, size)
+	if err != nil {
+		return Object{}, err
+	}
+	// Resolve binds only an object in a model format (MODELBRIDGE-L21); a
+	// pickle is the named case of that (MODELBRIDGE-L20, storage LS-1). A
+	// loose file without a format extension is judged by its first four
+	// bytes; a container member by its name alone (LS-9), which an empty
+	// path gives the source's classifiers.
+	header := ""
+	if native.Kind == BindFile {
+		header = native.Path
+	}
+	if source.IsPickle(header, base) {
+		return Object{}, fmt.Errorf("%w: %s in store %s is a pickle, which OA never loads", ErrPickle, locator, store)
+	}
+	if source.ModelFormatOf(header, base) == "" {
+		return Object{}, fmt.Errorf("%w: %s in store %s is in no model format OA loads", ErrUnknownObject, locator, store)
+	}
+	o := Object{Store: store, ID: id, Locator: locator, Family: family, File: base, Size: size, Kind: KindOf(store, locator)}
+	o.Binding, err = choose(native, accept)
+	if o.Binding.Kind == BindFile && err == nil {
+		o.Path = o.Binding.Path
+	}
+	return o, err
+}
+
+// nativeBinding is what the object's locator names on this machine: a file
+// under the store's root, or a member of a zip there (LS-8), which is a
+// region when every layer around its bytes is STORED and compressed
+// otherwise. The zip's directory is read again on every call, so a binding
+// always describes the container as it is now.
+func nativeBinding(root, locator string, size int64) (ObjectBinding, error) {
+	file, chain, ok := container.SplitMemberLocator(locator)
+	if ok {
+		zipPath := filepath.Join(root, filepath.FromSlash(file))
+		if st, err := os.Stat(zipPath); err == nil && st.Mode().IsRegular() {
+			members, err := container.Members(zipPath)
+			if err != nil {
+				return ObjectBinding{}, fmt.Errorf("%w: %v", ErrUnknownObject, err)
+			}
+			for _, m := range members {
+				if !slices.Equal(m.Chain(), chain) {
+					continue
+				}
+				if m.InPlace {
+					return ObjectBinding{Kind: BindRegion, Path: zipPath, Offset: m.Offset, Length: m.Size}, nil
+				}
+				// Members lists only members inside STORED zips, so each
+				// DEFLATE stream has a place in the file (LS-8).
+				return ObjectBinding{Kind: BindCompressed, Path: zipPath, Entries: chain, Method: "deflate",
+					Offset: m.FileOffset, Packed: m.Packed, CRC32: m.CRC32, Length: m.Size}, nil
+			}
+			return ObjectBinding{}, fmt.Errorf("%w: %s holds no member %s", ErrUnknownObject, file, strings.Join(chain, "!/"))
+		}
+	}
+	return ObjectBinding{Kind: BindFile, Path: filepath.Join(root, filepath.FromSlash(locator)), Length: size}, nil
 }
 
 func familyComponent(name string) bool {
@@ -205,8 +274,11 @@ func weights(m content.Manifest) (content.Entry, bool) {
 			return e, true
 		}
 	}
+	// A manifest of a projector or a VAE alone has that component as its
+	// weights; a manifest of configuration, templates or other files has
+	// none (MODELBRIDGE-L21).
 	for _, e := range m.Entries {
-		if e.Locator != "" {
+		if (e.Role == source.RoleProjector || e.Role == source.RoleVAE) && e.Locator != "" {
 			return e, true
 		}
 	}
